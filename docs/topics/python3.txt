@@ -6,7 +6,7 @@ Django 1.5 is the first version of Django to support Python 3. The same code
 runs both on Python 2 (≥ 2.6.5) and Python 3 (≥ 3.2), thanks to the six_
 compatibility layer.
 
-.. _six: http://packages.python.org/six/
+.. _six: http://pythonhosted.org/six/
 
 This document is primarily targeted at authors of pluggable application
 who want to support both Python 2 and 3. It also describes guidelines that
@@ -26,10 +26,10 @@ to stay compatible with Python 2. But authors of pluggable applications are
 encouraged to use the same porting strategy as Django itself.
 
 Writing compatible code is much easier if you target Python ≥ 2.6. Django 1.5
-introduces compatibility tools such as :mod:`django.utils.six`. For
-convenience, forwards-compatible aliases were introduced in Django 1.4.2. If
-your application takes advantage of these tools, it will require Django ≥
-1.4.2.
+introduces compatibility tools such as :mod:`django.utils.six`, which is a
+customized version of the :mod:`six module <six>`. For convenience,
+forwards-compatible aliases were introduced in Django 1.4.2. If your
+application takes advantage of these tools, it will require Django ≥ 1.4.2.
 
 Obviously, writing compatible source code adds some overhead, and that can
 cause frustration. Django's developers have found that attempting to write
@@ -42,7 +42,7 @@ developers are used to dealing with such constraints.
 Porting tools provided by Django are inspired by this philosophy, and it's
 reflected throughout this guide.
 
-.. _Python's official porting guide: http://docs.python.org/py3k/howto/pyporting.html
+.. _Python's official porting guide: http://docs.python.org/3/howto/pyporting.html
 .. _Pragmatic Unicode: http://nedbatchelder.com/text/unipain.html
 
 Porting tips
@@ -78,8 +78,8 @@ wherever possible and avoid the ``b`` prefixes.
 String handling
 ---------------
 
-Python 2's :func:`unicode` type was renamed :func:`str` in Python 3,
-:func:`str` was renamed ``bytes()``, and :func:`basestring` disappeared.
+Python 2's `unicode`_ type was renamed :class:`str` in Python 3,
+``str()`` was renamed :func:`bytes`, and `basestring`_ disappeared.
 six_ provides :ref:`tools <string-handling-with-six>` to deal with these
 changes.
 
@@ -131,35 +131,34 @@ and ``SafeText`` respectively.
 
 For forwards compatibility, the new names work as of Django 1.4.2.
 
-:meth:`~object.__str__` and :meth:`~object.__unicode__` methods
----------------------------------------------------------------
+:meth:`~object.__str__` and ` __unicode__()`_ methods
+-----------------------------------------------------
 
 In Python 2, the object model specifies :meth:`~object.__str__` and
-:meth:`~object.__unicode__` methods. If these methods exist, they must return
+` __unicode__()`_ methods. If these methods exist, they must return
 ``str`` (bytes) and ``unicode`` (text) respectively.
 
-The ``print`` statement and the :func:`str` built-in call
+The ``print`` statement and the :class:`str` built-in call
 :meth:`~object.__str__` to determine the human-readable representation of an
-object. The :func:`unicode` built-in calls :meth:`~object.__unicode__` if it
+object. The ``unicode`` built-in calls ` __unicode__()`_ if it
 exists, and otherwise falls back to :meth:`~object.__str__` and decodes the
 result with the system encoding. Conversely, the
 :class:`~django.db.models.Model` base class automatically derives
-:meth:`~object.__str__` from :meth:`~object.__unicode__` by encoding to UTF-8.
+:meth:`~object.__str__` from ` __unicode__()`_ by encoding to UTF-8.
 
 In Python 3, there's simply :meth:`~object.__str__`, which must return ``str``
 (text).
 
-(It is also possible to define ``__bytes__()``, but Django application have
-little use for that method, because they hardly ever deal with
-``bytes``.)
+(It is also possible to define :meth:`~object.__bytes__`, but Django application
+have little use for that method, because they hardly ever deal with ``bytes``.)
 
 Django provides a simple way to define :meth:`~object.__str__` and
-:meth:`~object.__unicode__` methods that work on Python 2 and 3: you must
+` __unicode__()`_ methods that work on Python 2 and 3: you must
 define a :meth:`~object.__str__` method returning text and to apply the
 :func:`~django.utils.encoding.python_2_unicode_compatible` decorator.
 
 On Python 3, the decorator is a no-op. On Python 2, it defines appropriate
-:meth:`~object.__unicode__` and :meth:`~object.__str__` methods (replacing the
+` __unicode__()`_ and :meth:`~object.__str__` methods (replacing the
 original :meth:`~object.__str__` method in the process). Here's an example::
 
     from __future__ import unicode_literals
@@ -233,7 +232,7 @@ In order to enable the same behavior in Python 2, every module must import
     my_bytestring = b"This is a bytestring"
 
 If you need a byte string literal under Python 2 and a unicode string literal
-under Python 3, use the :func:`str` builtin::
+under Python 3, use the :class:`str` builtin::
 
     str('my string')
 
@@ -246,7 +245,7 @@ consequence, the following pattern is sometimes necessary::
 
 Be cautious if you have to `index bytestrings`_.
 
-.. _index bytestrings: http://docs.python.org/py3k/howto/pyporting.html#bytes-literals
+.. _index bytestrings: http://docs.python.org/3/howto/pyporting.html#bytes-literals
 
 Exceptions
 ~~~~~~~~~~
@@ -328,8 +327,8 @@ Writing compatible code with six
 six_ is the canonical compatibility library for supporting Python 2 and 3 in
 a single codebase. Read its documentation!
 
-:mod:`six` is bundled with Django as of version 1.4.2. You can import it as
-:mod:`django.utils.six`.
+A :mod:`customized version of six <django.utils.six>` is bundled with Django
+as of version 1.4.2. You can import it as ``django.utils.six``.
 
 Here are the most common changes required to write compatible code.
 
@@ -364,37 +363,28 @@ Import ``six.moves.xrange`` wherever you use ``xrange``.
 Moved modules
 ~~~~~~~~~~~~~
 
-Some modules were renamed in Python 3. The :mod:`django.utils.six.moves
-<six.moves>` module provides a compatible location to import them.
+Some modules were renamed in Python 3. The ``django.utils.six.moves``
+module (based on the :mod:`six.moves module <six.moves>`) provides a
+compatible location to import them.
 
-The ``urllib``, ``urllib2`` and ``urlparse`` modules were reworked in depth
-and :mod:`django.utils.six.moves <six.moves>` doesn't handle them. Django
-explicitly tries both locations, as follows::
-
-    try:
-        from urllib.parse import urlparse, urlunparse
-    except ImportError:     # Python 2
-        from urlparse import urlparse, urlunparse
-
-PY3
+PY2
 ~~~
 
-If you need different code in Python 2 and Python 3, check :data:`six.PY3`::
+If you need different code in Python 2 and Python 3, check :data:`six.PY2`::
 
-    if six.PY3:
-        # do stuff Python 3-wise
-    else:
-        # do stuff Python 2-wise
+    if six.PY2:
+        # compatibility code for Python 2
 
 This is a last resort solution when :mod:`six` doesn't provide an appropriate
 function.
 
 .. module:: django.utils.six
 
-Customizations of six
----------------------
+Django customized version of six
+--------------------------------
 
-The version of six bundled with Django includes a few extras.
+The version of six bundled with Django (``django.utils.six``) includes a few
+extras.
 
 .. function:: assertRaisesRegex(testcase, *args, **kwargs)
 
@@ -411,3 +401,7 @@ The version of six bundled with Django includes a few extras.
 
 In addition to six' defaults moves, Django's version provides ``thread`` as
 ``_thread`` and ``dummy_thread`` as ``_dummy_thread``.
+
+.. _unicode: http://docs.python.org/2/library/functions.html#unicode
+.. _ __unicode__(): https://docs.python.org/2/reference/datamodel.html#object.__unicode__
+.. _basestring: http://docs.python.org/2/library/functions.html#basestring

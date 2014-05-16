@@ -6,20 +6,16 @@ import re
 import sys
 from io import BytesIO
 from pprint import pformat
-try:
-    from urllib.parse import parse_qsl, urlencode, quote, urljoin
-except ImportError:
-    from urllib import urlencode, quote
-    from urlparse import parse_qsl, urljoin
 
 from django.conf import settings
 from django.core import signing
 from django.core.exceptions import DisallowedHost, ImproperlyConfigured
 from django.core.files import uploadhandler
-from django.http.multipartparser import MultiPartParser
+from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.utils import six
 from django.utils.datastructures import MultiValueDict, ImmutableList
 from django.utils.encoding import force_bytes, force_text, force_str, iri_to_uri
+from django.utils.six.moves.urllib.parse import parse_qsl, urlencode, quote, urljoin
 
 
 RAISE_ERROR = object()
@@ -28,6 +24,15 @@ host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9:]+\])(:\d+)?
 
 
 class UnreadablePostError(IOError):
+    pass
+
+
+class RawPostDataException(Exception):
+    """
+    You cannot access raw_post_data from a request that has
+    multipart/* POST data if it has been accessed via POST,
+    FILES, etc..
+    """
     pass
 
 
@@ -57,7 +62,7 @@ class HttpRequest(object):
         """Returns the HTTP host using the environment or request headers."""
         # We try three options, in order of decreasing preference.
         if settings.USE_X_FORWARDED_HOST and (
-            'HTTP_X_FORWARDED_HOST' in self.META):
+                'HTTP_X_FORWARDED_HOST' in self.META):
             host = self.META['HTTP_X_FORWARDED_HOST']
         elif 'HTTP_HOST' in self.META:
             host = self.META['HTTP_HOST']
@@ -120,15 +125,16 @@ class HttpRequest(object):
         if not location:
             location = self.get_full_path()
         if not absolute_http_url_re.match(location):
-            current_uri = '%s://%s%s' % ('https' if self.is_secure() else 'http',
+            current_uri = '%s://%s%s' % (self.scheme,
                                          self.get_host(), self.path)
             location = urljoin(current_uri, location)
         return iri_to_uri(location)
 
-    def _is_secure(self):
-        return os.environ.get("HTTPS") == "on"
+    def _get_scheme(self):
+        return 'https' if os.environ.get("HTTPS") == "on" else 'http'
 
-    def is_secure(self):
+    @property
+    def scheme(self):
         # First, check the SECURE_PROXY_SSL_HEADER setting.
         if settings.SECURE_PROXY_SSL_HEADER:
             try:
@@ -136,11 +142,13 @@ class HttpRequest(object):
             except ValueError:
                 raise ImproperlyConfigured('The SECURE_PROXY_SSL_HEADER setting must be a tuple containing two values.')
             if self.META.get(header, None) == value:
-                return True
-
-        # Failing that, fall back to _is_secure(), which is a hook for
+                return 'https'
+        # Failing that, fall back to _get_scheme(), which is a hook for
         # subclasses to implement.
-        return self._is_secure()
+        return self._get_scheme()
+
+    def is_secure(self):
+        return self.scheme == 'https'
 
     def is_ajax(self):
         return self.META.get('HTTP_X_REQUESTED_WITH') == 'XMLHttpRequest'
@@ -192,7 +200,7 @@ class HttpRequest(object):
     def body(self):
         if not hasattr(self, '_body'):
             if self._read_started:
-                raise Exception("You cannot access body after reading from request's data stream")
+                raise RawPostDataException("You cannot access body after reading from request's data stream")
             try:
                 self._body = self.read()
             except IOError as e:
@@ -222,12 +230,12 @@ class HttpRequest(object):
                 data = self
             try:
                 self._post, self._files = self.parse_file_upload(self.META, data)
-            except:
-                # An error occured while parsing POST data. Since when
+            except MultiPartParserError:
+                # An error occurred while parsing POST data. Since when
                 # formatting the error the request handler might access
                 # self.POST, set self._post and self._file to prevent
                 # attempts to parse POST data again.
-                # Mark that an error occured. This allows self.__repr__ to
+                # Mark that an error occurred. This allows self.__repr__ to
                 # be explicit about it instead of simply representing an
                 # empty POST
                 self._mark_post_parse_error()
@@ -237,13 +245,13 @@ class HttpRequest(object):
         else:
             self._post, self._files = QueryDict('', encoding=self._encoding), MultiValueDict()
 
-    ## File-like and iterator interface.
-    ##
-    ## Expects self._stream to be set to an appropriate source of bytes by
-    ## a corresponding request subclass (e.g. WSGIRequest).
-    ## Also when request data has already been read by request.POST or
-    ## request.body, self._stream points to a BytesIO instance
-    ## containing that data.
+    # File-like and iterator interface.
+    #
+    # Expects self._stream to be set to an appropriate source of bytes by
+    # a corresponding request subclass (e.g. WSGIRequest).
+    # Also when request data has already been read by request.POST or
+    # request.body, self._stream points to a BytesIO instance
+    # containing that data.
 
     def read(self, *args, **kwargs):
         self._read_started = True
@@ -508,15 +516,17 @@ def validate_host(host, allowed_hosts):
     Return ``True`` for a valid host, ``False`` otherwise.
 
     """
+    host = host[:-1] if host.endswith('.') else host
+
     for pattern in allowed_hosts:
         pattern = pattern.lower()
         match = (
             pattern == '*' or
             pattern.startswith('.') and (
                 host.endswith(pattern) or host == pattern[1:]
-                ) or
+            ) or
             pattern == host
-            )
+        )
         if match:
             return True
 

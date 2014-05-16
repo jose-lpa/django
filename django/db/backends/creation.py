@@ -1,18 +1,19 @@
 import hashlib
 import sys
 import time
-import warnings
 
 from django.conf import settings
 from django.db.utils import load_backend
 from django.utils.encoding import force_bytes
+from django.utils.functional import cached_property
 from django.utils.six.moves import input
 
-from .util import truncate_name
+from .utils import truncate_name
 
 # The prefix to put on the default database name when creating
 # the test database.
 TEST_DATABASE_PREFIX = 'test_'
+NO_DB_ALIAS = '__no_db__'
 
 
 class BaseDatabaseCreation(object):
@@ -23,10 +24,29 @@ class BaseDatabaseCreation(object):
     destruction of test databases.
     """
     data_types = {}
+    data_types_suffix = {}
     data_type_check_constraints = {}
 
     def __init__(self, connection):
         self.connection = connection
+
+    @cached_property
+    def _nodb_connection(self):
+        """
+        Alternative connection to be used when there is no need to access
+        the main database, specifically for test db creation/deletion.
+        This also prevents the production database from being exposed to
+        potential child threads while (or after) the test database is destroyed.
+        Refs #10868, #17786, #16969.
+        """
+        settings_dict = self.connection.settings_dict.copy()
+        settings_dict['NAME'] = None
+        backend = load_backend(settings_dict['ENGINE'])
+        nodb_connection = backend.DatabaseWrapper(
+            settings_dict,
+            alias=NO_DB_ALIAS,
+            allow_thread_sharing=False)
+        return nodb_connection
 
     @classmethod
     def _digest(cls, *args):
@@ -53,6 +73,7 @@ class BaseDatabaseCreation(object):
         qn = self.connection.ops.quote_name
         for f in opts.local_fields:
             col_type = f.db_type(connection=self.connection)
+            col_type_suffix = f.db_type_suffix(connection=self.connection)
             tablespace = f.db_tablespace or opts.db_tablespace
             if col_type is None:
                 # Skip ManyToManyFields, because they're not represented as
@@ -88,6 +109,8 @@ class BaseDatabaseCreation(object):
                         (model, f))
                 else:
                     field_output.extend(ref_output)
+            if col_type_suffix:
+                field_output.append(style.SQL_KEYWORD(col_type_suffix))
             table_output.append(' '.join(field_output))
         for field_constraints in opts.unique_together:
             table_output.append(style.SQL_KEYWORD('UNIQUE') + ' (%s)' %
@@ -352,17 +375,10 @@ class BaseDatabaseCreation(object):
             interactive=False,
             database=self.connection.alias)
 
-        from django.core.cache import get_cache
-        from django.core.cache.backends.db import BaseDatabaseCache
-        for cache_alias in settings.CACHES:
-            cache = get_cache(cache_alias)
-            if isinstance(cache, BaseDatabaseCache):
-                call_command('createcachetable', cache._table,
-                             database=self.connection.alias)
+        call_command('createcachetable', database=self.connection.alias)
 
-        # Get a cursor (even though we don't need one yet). This has
-        # the side effect of initializing the test database.
-        self.connection.cursor()
+        # Ensure a connection for the side effect of initializing the test database.
+        self.connection.ensure_connection()
 
         return test_database_name
 
@@ -373,8 +389,8 @@ class BaseDatabaseCreation(object):
         _create_test_db() and when no external munging is done with the 'NAME'
         or 'TEST_NAME' settings.
         """
-        if self.connection.settings_dict['TEST_NAME']:
-            return self.connection.settings_dict['TEST_NAME']
+        if self.connection.settings_dict['TEST']['NAME']:
+            return self.connection.settings_dict['TEST']['NAME']
         return TEST_DATABASE_PREFIX + self.connection.settings_dict['NAME']
 
     def _create_test_db(self, verbosity, autoclobber):
@@ -388,34 +404,34 @@ class BaseDatabaseCreation(object):
         qn = self.connection.ops.quote_name
 
         # Create the test database and connect to it.
-        cursor = self.connection.cursor()
-        try:
-            cursor.execute(
-                "CREATE DATABASE %s %s" % (qn(test_database_name), suffix))
-        except Exception as e:
-            sys.stderr.write(
-                "Got an error creating the test database: %s\n" % e)
-            if not autoclobber:
-                confirm = input(
-                    "Type 'yes' if you would like to try deleting the test "
-                    "database '%s', or 'no' to cancel: " % test_database_name)
-            if autoclobber or confirm == 'yes':
-                try:
-                    if verbosity >= 1:
-                        print("Destroying old test database '%s'..."
-                              % self.connection.alias)
-                    cursor.execute(
-                        "DROP DATABASE %s" % qn(test_database_name))
-                    cursor.execute(
-                        "CREATE DATABASE %s %s" % (qn(test_database_name),
-                                                   suffix))
-                except Exception as e:
-                    sys.stderr.write(
-                        "Got an error recreating the test database: %s\n" % e)
-                    sys.exit(2)
-            else:
-                print("Tests cancelled.")
-                sys.exit(1)
+        with self._nodb_connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "CREATE DATABASE %s %s" % (qn(test_database_name), suffix))
+            except Exception as e:
+                sys.stderr.write(
+                    "Got an error creating the test database: %s\n" % e)
+                if not autoclobber:
+                    confirm = input(
+                        "Type 'yes' if you would like to try deleting the test "
+                        "database '%s', or 'no' to cancel: " % test_database_name)
+                if autoclobber or confirm == 'yes':
+                    try:
+                        if verbosity >= 1:
+                            print("Destroying old test database '%s'..."
+                                  % self.connection.alias)
+                        cursor.execute(
+                            "DROP DATABASE %s" % qn(test_database_name))
+                        cursor.execute(
+                            "CREATE DATABASE %s %s" % (qn(test_database_name),
+                                                       suffix))
+                    except Exception as e:
+                        sys.stderr.write(
+                            "Got an error recreating the test database: %s\n" % e)
+                        sys.exit(2)
+                else:
+                    print("Tests cancelled.")
+                    sys.exit(1)
 
         return test_database_name
 
@@ -433,18 +449,7 @@ class BaseDatabaseCreation(object):
             print("Destroying test database for alias '%s'%s..." % (
                 self.connection.alias, test_db_repr))
 
-        # Temporarily use a new connection and a copy of the settings dict.
-        # This prevents the production database from being exposed to potential
-        # child threads while (or after) the test database is destroyed.
-        # Refs #10868 and #17786.
-        settings_dict = self.connection.settings_dict.copy()
-        settings_dict['NAME'] = old_database_name
-        backend = load_backend(settings_dict['ENGINE'])
-        new_connection = backend.DatabaseWrapper(
-                             settings_dict,
-                             alias='__destroy_test_db__',
-                             allow_thread_sharing=False)
-        new_connection.creation._destroy_test_db(test_database_name, verbosity)
+        self._destroy_test_db(test_database_name, verbosity)
 
     def _destroy_test_db(self, test_database_name, verbosity):
         """
@@ -454,23 +459,11 @@ class BaseDatabaseCreation(object):
         # ourselves. Connect to the previous database (not the test database)
         # to do so, because it's not allowed to delete a database while being
         # connected to it.
-        cursor = self.connection.cursor()
-        # Wait to avoid "database is being accessed by other users" errors.
-        time.sleep(1)
-        cursor.execute("DROP DATABASE %s"
-                       % self.connection.ops.quote_name(test_database_name))
-        self.connection.close()
-
-    def set_autocommit(self):
-        """
-        Make sure a connection is in autocommit mode. - Deprecated, not used
-        anymore by Django code. Kept for compatibility with user code that
-        might use it.
-        """
-        warnings.warn(
-            "set_autocommit was moved from BaseDatabaseCreation to "
-            "BaseDatabaseWrapper.", DeprecationWarning, stacklevel=2)
-        return self.connection.set_autocommit(True)
+        with self._nodb_connection.cursor() as cursor:
+            # Wait to avoid "database is being accessed by other users" errors.
+            time.sleep(1)
+            cursor.execute("DROP DATABASE %s"
+                           % self.connection.ops.quote_name(test_database_name))
 
     def sql_table_creation_suffix(self):
         """

@@ -13,7 +13,7 @@ from django.utils.encoding import force_bytes, force_str, force_text
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.crypto import (
     pbkdf2, constant_time_compare, get_random_string)
-from django.utils.module_loading import import_by_path
+from django.utils.module_loading import import_string
 from django.utils.translation import ugettext_noop as _
 
 
@@ -56,6 +56,8 @@ def check_password(password, encoded, setter=None, preferred='default'):
     hasher = identify_hasher(encoded)
 
     must_update = hasher.algorithm != preferred.algorithm
+    if not must_update:
+        must_update = preferred.must_update(encoded)
     is_correct = hasher.verify(password, encoded)
     if setter and is_correct and must_update:
         setter(password)
@@ -90,7 +92,7 @@ def load_hashers(password_hashers=None):
     if not password_hashers:
         password_hashers = settings.PASSWORD_HASHERS
     for backend in password_hashers:
-        hasher = import_by_path(backend)()
+        hasher = import_string(backend)()
         if not getattr(hasher, 'algorithm'):
             raise ImproperlyConfigured("hasher doesn't specify an "
                                        "algorithm name: %s" % backend)
@@ -184,7 +186,7 @@ class BasePasswordHasher(object):
 
     def salt(self):
         """
-        Generates a cryptographically secure nonce salt in ascii
+        Generates a cryptographically secure nonce salt in ASCII
         """
         return get_random_string()
 
@@ -192,7 +194,7 @@ class BasePasswordHasher(object):
         """
         Checks if the given password is correct
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of BasePasswordHasher must provide a verify() method')
 
     def encode(self, password, salt):
         """
@@ -201,7 +203,7 @@ class BasePasswordHasher(object):
         The result is normally formatted as "algorithm$salt$hash" and
         must be fewer than 128 characters.
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of BasePasswordHasher must provide an encode() method')
 
     def safe_summary(self, encoded):
         """
@@ -210,19 +212,22 @@ class BasePasswordHasher(object):
         The result is a dictionary and will be used where the password field
         must be displayed to construct a safe representation of the password.
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of BasePasswordHasher must provide a safe_summary() method')
+
+    def must_update(self, encoded):
+        return False
 
 
 class PBKDF2PasswordHasher(BasePasswordHasher):
     """
     Secure password hashing using the PBKDF2 algorithm (recommended)
 
-    Configured to use PBKDF2 + HMAC + SHA256 with 10000 iterations.
+    Configured to use PBKDF2 + HMAC + SHA256 with 12000 iterations.
     The result is a 64 byte binary string.  Iterations may be changed
     safely but you must rename the algorithm if you change SHA256.
     """
     algorithm = "pbkdf2_sha256"
-    iterations = 10000
+    iterations = 12000
     digest = hashlib.sha256
 
     def encode(self, password, salt, iterations=None):
@@ -249,6 +254,10 @@ class PBKDF2PasswordHasher(BasePasswordHasher):
             (_('salt'), mask_hash(salt)),
             (_('hash'), mask_hash(hash)),
         ])
+
+    def must_update(self, encoded):
+        algorithm, iterations, salt, hash = encoded.split('$', 3)
+        return int(iterations) != self.iterations
 
 
 class PBKDF2SHA1PasswordHasher(PBKDF2PasswordHasher):
@@ -313,8 +322,10 @@ class BCryptSHA256PasswordHasher(BasePasswordHasher):
 
         # Ensure that our data is a bytestring
         data = force_bytes(data)
+        # force_bytes() necessary for py-bcrypt compatibility
+        hashpw = force_bytes(bcrypt.hashpw(password, data))
 
-        return constant_time_compare(data, bcrypt.hashpw(password, data))
+        return constant_time_compare(data, hashpw)
 
     def safe_summary(self, encoded):
         algorithm, empty, algostr, work_factor, data = encoded.split('$', 4)
@@ -501,4 +512,3 @@ class CryptPasswordHasher(BasePasswordHasher):
             (_('salt'), salt),
             (_('hash'), mask_hash(data, show=3)),
         ])
-

@@ -3,6 +3,7 @@ import os
 
 from django import forms
 from django.db.models.fields import Field
+from django.core import checks
 from django.core.files.base import File
 from django.core.files.storage import default_storage
 from django.core.files.images import ImageFile
@@ -142,11 +143,14 @@ class FileDescriptor(object):
     The descriptor for the file attribute on the model instance. Returns a
     FieldFile when accessed so you can do stuff like::
 
+        >>> from myapp.models import MyModel
+        >>> instance = MyModel.objects.get(pk=1)
         >>> instance.file.size
 
     Assigns a file object on assignment so you can do::
 
-        >>> instance.file = File(...)
+        >>> with open('/tmp/hello.world', 'r') as f:
+        ...     instance.file = File(f)
 
     """
     def __init__(self, field):
@@ -220,9 +224,8 @@ class FileField(Field):
     description = _("File")
 
     def __init__(self, verbose_name=None, name=None, upload_to='', storage=None, **kwargs):
-        for arg in ('primary_key', 'unique'):
-            if arg in kwargs:
-                raise TypeError("'%s' is not a valid argument for %s." % (arg, self.__class__))
+        self._primary_key_set_explicitly = 'primary_key' in kwargs
+        self._unique_set_explicitly = 'unique' in kwargs
 
         self.storage = storage or default_storage
         self.upload_to = upload_to
@@ -232,11 +235,41 @@ class FileField(Field):
         kwargs['max_length'] = kwargs.get('max_length', 100)
         super(FileField, self).__init__(verbose_name, name, **kwargs)
 
+    def check(self, **kwargs):
+        errors = super(FileField, self).check(**kwargs)
+        errors.extend(self._check_unique())
+        errors.extend(self._check_primary_key())
+        return errors
+
+    def _check_unique(self):
+        if self._unique_set_explicitly:
+            return [
+                checks.Error(
+                    "'unique' is not a valid argument for a %s." % self.__class__.__name__,
+                    hint=None,
+                    obj=self,
+                    id='fields.E200',
+                )
+            ]
+        else:
+            return []
+
+    def _check_primary_key(self):
+        if self._primary_key_set_explicitly:
+            return [
+                checks.Error(
+                    "'primary_key' is not a valid argument for a %s." % self.__class__.__name__,
+                    hint=None,
+                    obj=self,
+                    id='fields.E201',
+                )
+            ]
+        else:
+            return []
+
     def deconstruct(self):
         name, path, args, kwargs = super(FileField, self).deconstruct()
-        if kwargs.get("max_length", None) != 100:
-            kwargs["max_length"] = 100
-        else:
+        if kwargs.get("max_length", None) == 100:
             del kwargs["max_length"]
         kwargs['upload_to'] = self.upload_to
         if self.storage is not default_storage:
@@ -345,6 +378,27 @@ class ImageField(FileField):
         self.width_field, self.height_field = width_field, height_field
         super(ImageField, self).__init__(verbose_name, name, **kwargs)
 
+    def check(self, **kwargs):
+        errors = super(ImageField, self).check(**kwargs)
+        errors.extend(self._check_image_library_installed())
+        return errors
+
+    def _check_image_library_installed(self):
+        try:
+            from PIL import Image  # NOQA
+        except ImportError:
+            return [
+                checks.Error(
+                    'Cannot use ImageField because Pillow is not installed.',
+                    hint=('Get Pillow at https://pypi.python.org/pypi/Pillow '
+                          'or run command "pip install pillow".'),
+                    obj=self,
+                    id='fields.E210',
+                )
+            ]
+        else:
+            return []
+
     def deconstruct(self):
         name, path, args, kwargs = super(ImageField, self).deconstruct()
         if self.width_field:
@@ -358,7 +412,9 @@ class ImageField(FileField):
         # Attach update_dimension_fields so that dimension fields declared
         # after their corresponding image field don't stay cleared by
         # Model.__init__, see bug #11196.
-        signals.post_init.connect(self.update_dimension_fields, sender=cls)
+        # Only run post-initialization dimension update on non-abstract models
+        if not cls._meta.abstract:
+            signals.post_init.connect(self.update_dimension_fields, sender=cls)
 
     def update_dimension_fields(self, instance, force=False, *args, **kwargs):
         """
@@ -373,7 +429,7 @@ class ImageField(FileField):
         Dimensions can be forced to update with force=True, which is how
         ImageFileDescriptor.__set__ calls this method.
         """
-        # Nothing to update if the field doesn't have have dimension fields.
+        # Nothing to update if the field doesn't have dimension fields.
         has_dimension_fields = self.width_field or self.height_field
         if not has_dimension_fields:
             return

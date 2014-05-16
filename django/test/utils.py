@@ -2,10 +2,13 @@ from contextlib import contextmanager
 import logging
 import re
 import sys
+import time
+from unittest import skipUnless
 import warnings
 from functools import wraps
 from xml.dom.minidom import parseString, Node
 
+from django.apps import apps
 from django.conf import settings, UserSettingsHolder
 from django.core import mail
 from django.core.signals import request_started
@@ -14,17 +17,21 @@ from django.http import request
 from django.template import Template, loader, TemplateDoesNotExist
 from django.template.loaders import cached
 from django.test.signals import template_rendered, setting_changed
-from django.utils.encoding import force_str
 from django.utils import six
+from django.utils.deprecation import RemovedInDjango19Warning, RemovedInDjango20Warning
+from django.utils.encoding import force_str
 from django.utils.translation import deactivate
 
 
 __all__ = (
-    'Approximate', 'ContextList',  'get_runner', 'override_settings',
+    'Approximate', 'ContextList', 'get_runner',
+    'modify_settings', 'override_settings',
+    'requires_tz_support',
     'setup_test_environment', 'teardown_test_environment',
 )
 
 RESTORE_LOADERS_ATTR = '_original_template_source_loaders'
+TZ_SUPPORT = hasattr(time, 'tzset')
 
 
 class Approximate(object):
@@ -200,18 +207,7 @@ class override_settings(object):
                 raise Exception(
                     "Only subclasses of Django SimpleTestCase can be decorated "
                     "with override_settings")
-            original_pre_setup = test_func._pre_setup
-            original_post_teardown = test_func._post_teardown
-
-            def _pre_setup(innerself):
-                self.enable()
-                original_pre_setup(innerself)
-
-            def _post_teardown(innerself):
-                original_post_teardown(innerself)
-                self.disable()
-            test_func._pre_setup = _pre_setup
-            test_func._post_teardown = _post_teardown
+            self.save_options(test_func)
             return test_func
         else:
             @wraps(test_func)
@@ -220,7 +216,23 @@ class override_settings(object):
                     return test_func(*args, **kwargs)
         return inner
 
+    def save_options(self, test_func):
+        if test_func._overridden_settings is None:
+            test_func._overridden_settings = self.options
+        else:
+            # Duplicate dict to prevent subclasses from altering their parent.
+            test_func._overridden_settings = dict(
+                test_func._overridden_settings, **self.options)
+
     def enable(self):
+        # Keep this code at the beginning to leave the settings unchanged
+        # in case it raises an exception because INSTALLED_APPS is invalid.
+        if 'INSTALLED_APPS' in self.options:
+            try:
+                apps.set_installed_apps(self.options['INSTALLED_APPS'])
+            except Exception:
+                apps.unset_installed_apps()
+                raise
         override = UserSettingsHolder(settings._wrapped)
         for key, new_value in self.options.items():
             setattr(override, key, new_value)
@@ -231,12 +243,81 @@ class override_settings(object):
                                  setting=key, value=new_value, enter=True)
 
     def disable(self):
+        if 'INSTALLED_APPS' in self.options:
+            apps.unset_installed_apps()
         settings._wrapped = self.wrapped
         del self.wrapped
         for key in self.options:
             new_value = getattr(settings, key, None)
             setting_changed.send(sender=settings._wrapped.__class__,
                                  setting=key, value=new_value, enter=False)
+
+
+class modify_settings(override_settings):
+    """
+    Like override_settings, but makes it possible to append, prepend or remove
+    items instead of redefining the entire list.
+    """
+    def __init__(self, *args, **kwargs):
+        if args:
+            # Hack used when instantiating from SimpleTestCase._pre_setup.
+            assert not kwargs
+            self.operations = args[0]
+        else:
+            assert not args
+            self.operations = list(kwargs.items())
+
+    def save_options(self, test_func):
+        if test_func._modified_settings is None:
+            test_func._modified_settings = self.operations
+        else:
+            # Duplicate list to prevent subclasses from altering their parent.
+            test_func._modified_settings = list(
+                test_func._modified_settings) + self.operations
+
+    def enable(self):
+        self.options = {}
+        for name, operations in self.operations:
+            try:
+                # When called from SimpleTestCase._pre_setup, values may be
+                # overridden several times; cumulate changes.
+                value = self.options[name]
+            except KeyError:
+                value = list(getattr(settings, name, []))
+            for action, items in operations.items():
+                # items my be a single value or an iterable.
+                if isinstance(items, six.string_types):
+                    items = [items]
+                if action == 'append':
+                    value = value + [item for item in items if item not in value]
+                elif action == 'prepend':
+                    value = [item for item in items if item not in value] + value
+                elif action == 'remove':
+                    value = [item for item in value if item not in items]
+                else:
+                    raise ValueError("Unsupported action: %s" % action)
+            self.options[name] = value
+        super(modify_settings, self).enable()
+
+
+def override_system_checks(new_checks):
+    """ Acts as a decorator. Overrides list of registered system checks.
+    Useful when you override `INSTALLED_APPS`, e.g. if you exclude `auth` app,
+    you also need to exclude its system checks. """
+
+    from django.core.checks.registry import registry
+
+    def outer(test_func):
+        @wraps(test_func)
+        def inner(*args, **kwargs):
+            old_checks = registry.registered_checks
+            registry.registered_checks = new_checks
+            try:
+                return test_func(*args, **kwargs)
+            finally:
+                registry.registered_checks = old_checks
+        return inner
+    return outer
 
 
 def compare_xml(want, got):
@@ -248,6 +329,7 @@ def compare_xml(want, got):
     Based on http://codespeak.net/svn/lxml/trunk/src/lxml/doctestcompare.py
     """
     _norm_whitespace_re = re.compile(r'[ \t\n][ \t\n]+')
+
     def norm_whitespace(v):
         return _norm_whitespace_re.sub(' ', v)
 
@@ -287,8 +369,8 @@ def compare_xml(want, got):
                 return node
 
     want, got = strip_quotes(want, got)
-    want = want.replace('\\n','\n')
-    got = got.replace('\\n','\n')
+    want = want.replace('\\n', '\n')
+    got = got.replace('\\n', '\n')
 
     # If the string is not a complete xml document, we may need to add a
     # root element. This allow us to compare fragments, like "<foo/><bar/>"
@@ -376,8 +458,7 @@ class CaptureQueriesContext(object):
 
 
 class IgnoreDeprecationWarningsMixin(object):
-
-    warning_classes = [DeprecationWarning]
+    warning_classes = [RemovedInDjango19Warning]
 
     def setUp(self):
         super(IgnoreDeprecationWarningsMixin, self).setUp()
@@ -392,13 +473,11 @@ class IgnoreDeprecationWarningsMixin(object):
 
 
 class IgnorePendingDeprecationWarningsMixin(IgnoreDeprecationWarningsMixin):
-
-        warning_classes = [PendingDeprecationWarning]
+        warning_classes = [RemovedInDjango20Warning]
 
 
 class IgnoreAllDeprecationWarningsMixin(IgnoreDeprecationWarningsMixin):
-
-        warning_classes = [PendingDeprecationWarning, DeprecationWarning]
+        warning_classes = [RemovedInDjango20Warning, RemovedInDjango19Warning]
 
 
 @contextmanager
@@ -408,8 +487,9 @@ def patch_logger(logger_name, log_level):
     and provides a simple mock-like list of messages received
     """
     calls = []
-    def replacement(msg):
-        calls.append(msg)
+
+    def replacement(msg, *args, **kwargs):
+        calls.append(msg % args)
     logger = logging.getLogger(logger_name)
     orig = getattr(logger, log_level)
     setattr(logger, log_level, replacement)
@@ -417,3 +497,24 @@ def patch_logger(logger_name, log_level):
         yield calls
     finally:
         setattr(logger, log_level, orig)
+
+
+# On OSes that don't provide tzset (Windows), we can't set the timezone
+# in which the program runs. As a consequence, we must skip tests that
+# don't enforce a specific timezone (with timezone.override or equivalent),
+# or attempt to interpret naive datetimes in the default timezone.
+
+requires_tz_support = skipUnless(TZ_SUPPORT,
+        "This test relies on the ability to run a program in an arbitrary "
+        "time zone, but your operating system isn't able to do that.")
+
+
+@contextmanager
+def extend_sys_path(*paths):
+    """Context manager to temporarily add paths to sys.path."""
+    _orig_sys_path = sys.path[:]
+    sys.path.extend(paths)
+    try:
+        yield
+    finally:
+        sys.path = _orig_sys_path

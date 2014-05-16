@@ -2,8 +2,6 @@ from datetime import datetime
 import sys
 import unittest
 
-from django.http import HttpResponse, utils
-from django.test import RequestFactory
 from django.utils.datastructures import MultiValueDict
 from django.utils import http
 from django.utils import six
@@ -36,7 +34,7 @@ class TestUtilsHttp(unittest.TestCase):
         self.assertEqual(result, 'a=1&b=2&c=3')
 
         # A dictionary
-        result = http.urlencode({ 'a': 1, 'b': 2, 'c': 3})
+        result = http.urlencode({'a': 1, 'b': 2, 'c': 3})
         acceptable_results = [
             # Need to allow all of these as dictionaries have to be treated as
             # unordered
@@ -67,60 +65,16 @@ class TestUtilsHttp(unittest.TestCase):
         ]
         self.assertTrue(result in acceptable_results)
 
-    def test_fix_IE_for_vary(self):
-        """
-        Regression for #16632.
-
-        `fix_IE_for_vary` shouldn't crash when there's no Content-Type header.
-        """
-
-        # functions to generate responses
-        def response_with_unsafe_content_type():
-            r = HttpResponse(content_type="text/unsafe")
-            r['Vary'] = 'Cookie'
-            return r
-
-        def no_content_response_with_unsafe_content_type():
-            # 'Content-Type' always defaulted, so delete it
-            r = response_with_unsafe_content_type()
-            del r['Content-Type']
-            return r
-
-        # request with & without IE user agent
-        rf = RequestFactory()
-        request = rf.get('/')
-        ie_request = rf.get('/', HTTP_USER_AGENT='MSIE')
-
-        # not IE, unsafe_content_type
-        response = response_with_unsafe_content_type()
-        utils.fix_IE_for_vary(request, response)
-        self.assertTrue('Vary' in response)
-
-        # IE, unsafe_content_type
-        response = response_with_unsafe_content_type()
-        utils.fix_IE_for_vary(ie_request, response)
-        self.assertFalse('Vary' in response)
-
-        # not IE, no_content
-        response = no_content_response_with_unsafe_content_type()
-        utils.fix_IE_for_vary(request, response)
-        self.assertTrue('Vary' in response)
-
-        # IE, no_content
-        response = no_content_response_with_unsafe_content_type()
-        utils.fix_IE_for_vary(ie_request, response)
-        self.assertFalse('Vary' in response)
-
     def test_base36(self):
         # reciprocity works
         for n in [0, 1, 1000, 1000000]:
             self.assertEqual(n, http.base36_to_int(http.int_to_base36(n)))
-        if not six.PY3:
+        if six.PY2:
             self.assertEqual(sys.maxint, http.base36_to_int(http.int_to_base36(sys.maxint)))
 
         # bad input
         self.assertRaises(ValueError, http.int_to_base36, -1)
-        if not six.PY3:
+        if six.PY2:
             self.assertRaises(ValueError, http.int_to_base36, sys.maxint + 1)
         for n in ['1', 'foo', {1: 2}, (1, 2, 3), 3.141]:
             self.assertRaises(TypeError, http.int_to_base36, n)
@@ -134,6 +88,36 @@ class TestUtilsHttp(unittest.TestCase):
         for n, b36 in [(0, '0'), (1, '1'), (42, '16'), (818469960, 'django')]:
             self.assertEqual(http.int_to_base36(n), b36)
             self.assertEqual(http.base36_to_int(b36), n)
+
+    def test_is_safe_url(self):
+        for bad_url in ('http://example.com',
+                        'http:///example.com',
+                        'https://example.com',
+                        'ftp://exampel.com',
+                        r'\\example.com',
+                        r'\\\example.com',
+                        r'/\\/example.com',
+                        r'\\\example.com',
+                        r'\\example.com',
+                        r'\\//example.com',
+                        r'/\/example.com',
+                        r'\/example.com',
+                        r'/\example.com',
+                        'http:///example.com',
+                        'http:/\//example.com',
+                        'http:\/example.com',
+                        'http:/\example.com',
+                        'javascript:alert("XSS")'):
+            self.assertFalse(http.is_safe_url(bad_url, host='testserver'), "%s should be blocked" % bad_url)
+        for good_url in ('/view/?param=http://example.com',
+                     '/view/?param=https://example.com',
+                     '/view?param=ftp://exampel.com',
+                     'view/?param=//example.com',
+                     'https://testserver/',
+                     'HTTPS://testserver/',
+                     '//testserver/',
+                     '/url%20with%20spaces/'):
+            self.assertTrue(http.is_safe_url(good_url, host='testserver'), "%s should be allowed" % good_url)
 
 
 class ETagProcessingTests(unittest.TestCase):

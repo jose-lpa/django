@@ -3,7 +3,6 @@ from __future__ import unicode_literals
 import pickle
 import datetime
 
-from django.db import models
 from django.test import TestCase
 
 from .models import Group, Event, Happening, Container, M2MModel
@@ -11,7 +10,7 @@ from .models import Group, Event, Happening, Container, M2MModel
 
 class PickleabilityTestCase(TestCase):
     def setUp(self):
-        Happening.objects.create() # make sure the defaults are working (#20158)
+        Happening.objects.create()  # make sure the defaults are working (#20158)
 
     def assert_pickles(self, qs):
         self.assertEqual(list(pickle.loads(pickle.dumps(qs))), list(qs))
@@ -50,6 +49,9 @@ class PickleabilityTestCase(TestCase):
         # can't just use assertEqual(original, unpickled)
         self.assertEqual(original.__class__, unpickled.__class__)
         self.assertEqual(original.args, unpickled.args)
+
+    def test_manager_pickle(self):
+        pickle.loads(pickle.dumps(Happening.objects))
 
     def test_model_pickle(self):
         """
@@ -94,3 +96,15 @@ class PickleabilityTestCase(TestCase):
     def test_specialized_queryset(self):
         self.assert_pickles(Happening.objects.values('name'))
         self.assert_pickles(Happening.objects.values('name').dates('when', 'year'))
+
+    def test_pickle_prefetch_related_idempotence(self):
+        g = Group.objects.create(name='foo')
+        groups = Group.objects.prefetch_related('event_set')
+
+        # First pickling
+        groups = pickle.loads(pickle.dumps(groups))
+        self.assertQuerysetEqual(groups, [g], lambda x: x)
+
+        # Second pickling
+        groups = pickle.loads(pickle.dumps(groups))
+        self.assertQuerysetEqual(groups, [g], lambda x: x)

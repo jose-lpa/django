@@ -2,7 +2,7 @@
 from __future__ import unicode_literals
 
 from django.core.exceptions import ValidationError
-from django.forms.util import flatatt, ErrorDict, ErrorList
+from django.forms.utils import flatatt, ErrorDict, ErrorList
 from django.test import TestCase
 from django.utils.safestring import mark_safe
 from django.utils import six
@@ -11,7 +11,7 @@ from django.utils.encoding import python_2_unicode_compatible
 
 
 class FormsUtilTestCase(TestCase):
-        # Tests for forms/util.py module.
+    # Tests for forms/utils.py module.
 
     def test_flatatt(self):
         ###########
@@ -20,6 +20,9 @@ class FormsUtilTestCase(TestCase):
 
         self.assertEqual(flatatt({'id': "header"}), ' id="header"')
         self.assertEqual(flatatt({'class': "news", 'title': "Read this"}), ' class="news" title="Read this"')
+        self.assertEqual(flatatt({'class': "news", 'title': "Read this", 'required': "required"}), ' class="news" required="required" title="Read this"')
+        self.assertEqual(flatatt({'class': "news", 'title': "Read this", 'required': True}), ' class="news" title="Read this" required')
+        self.assertEqual(flatatt({'class': "news", 'title': "Read this", 'required': False}), ' class="news" title="Read this"')
         self.assertEqual(flatatt({}), '')
 
     def test_validation_error(self):
@@ -49,7 +52,8 @@ class FormsUtilTestCase(TestCase):
 
         @python_2_unicode_compatible
         class VeryBadError:
-            def __str__(self): return "A very bad error."
+            def __str__(self):
+                return "A very bad error."
 
         # Can take a non-string.
         self.assertHTMLEqual(str(ErrorList(ValidationError(VeryBadError()).messages)),

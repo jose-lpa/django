@@ -34,6 +34,9 @@ class DatabaseCreation(BaseDatabaseCreation):
         'TextField': 'text',
         'TimeField': 'time',
     }
+    data_types_suffix = {
+        'AutoField': 'AUTOINCREMENT',
+    }
 
     def sql_for_pending_references(self, model, style, pending_references):
         "SQLite3 doesn't support constraints"
@@ -44,7 +47,7 @@ class DatabaseCreation(BaseDatabaseCreation):
         return []
 
     def _get_test_db_name(self):
-        test_database_name = self.connection.settings_dict['TEST_NAME']
+        test_database_name = self.connection.settings_dict['TEST']['NAME']
         if test_database_name and test_database_name != ':memory:':
             return test_database_name
         return ':memory:'
@@ -80,7 +83,7 @@ class DatabaseCreation(BaseDatabaseCreation):
 
         This takes into account the special cases of ":memory:" and "" for
         SQLite since the databases will be distinct despite having the same
-        TEST_NAME. See http://www.sqlite.org/inmemorydb.html
+        TEST NAME. See http://www.sqlite.org/inmemorydb.html
         """
         test_dbname = self._get_test_db_name()
         sig = [self.connection.settings_dict['NAME']]

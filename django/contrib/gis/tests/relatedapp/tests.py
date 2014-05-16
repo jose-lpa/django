@@ -3,7 +3,7 @@ from __future__ import unicode_literals
 from unittest import skipUnless
 
 from django.contrib.gis.geos import HAS_GEOS
-from django.contrib.gis.tests.utils import HAS_SPATIAL_DB, mysql, oracle, no_mysql, no_oracle, no_spatialite
+from django.contrib.gis.tests.utils import HAS_SPATIAL_DB, mysql, no_mysql, no_oracle, no_spatialite
 from django.test import TestCase
 
 if HAS_GEOS:
@@ -27,7 +27,7 @@ class RelatedGeoModelTest(TestCase):
         cities = (
             ('Aurora', 'TX', -97.516111, 33.058333),
             ('Roswell', 'NM', -104.528056, 33.387222),
-            ('Kecksburg', 'PA',  -79.460734, 40.18476),
+            ('Kecksburg', 'PA', -79.460734, 40.18476),
         )
 
         for qs in (qs1, qs2, qs3):
@@ -79,7 +79,8 @@ class RelatedGeoModelTest(TestCase):
         # between the Oracle and PostGIS spatial backends on the extent calculation.
         tol = 4
         for ref, e in [(all_extent, e1), (txpa_extent, e2), (all_extent, e3)]:
-            for ref_val, e_val in zip(ref, e): self.assertAlmostEqual(ref_val, e_val, tol)
+            for ref_val, e_val in zip(ref, e):
+                self.assertAlmostEqual(ref_val, e_val, tol)
 
     @no_mysql
     def test04b_related_union_aggregate(self):
@@ -95,31 +96,28 @@ class RelatedGeoModelTest(TestCase):
         p4 = Point(-96.801611, 32.782057)
         p5 = Point(-95.363151, 29.763374)
 
-        # Creating the reference union geometry depending on the spatial backend,
-        # as Oracle will have a different internal ordering of the component
-        # geometries than PostGIS.  The second union aggregate is for a union
+        # The second union aggregate is for a union
         # query that includes limiting information in the WHERE clause (in other
         # words a `.filter()` precedes the call to `.unionagg()`).
-        if oracle:
-            ref_u1 = MultiPoint(p4, p5, p3, p1, p2, srid=4326)
-            ref_u2 = MultiPoint(p3, p2, srid=4326)
-        else:
-            # Looks like PostGIS points by longitude value.
-            ref_u1 = MultiPoint(p1, p2, p4, p5, p3, srid=4326)
-            ref_u2 = MultiPoint(p2, p3, srid=4326)
+        ref_u1 = MultiPoint(p1, p2, p4, p5, p3, srid=4326)
+        ref_u2 = MultiPoint(p2, p3, srid=4326)
 
         u1 = City.objects.unionagg(field_name='location__point')
         u2 = City.objects.exclude(name__in=('Roswell', 'Houston', 'Dallas', 'Fort Worth')).unionagg(field_name='location__point')
         u3 = aggs['location__point__union']
+        self.assertEqual(type(u1), MultiPoint)
+        self.assertEqual(type(u3), MultiPoint)
 
-        self.assertEqual(ref_u1, u1)
-        self.assertEqual(ref_u2, u2)
-        self.assertEqual(ref_u1, u3)
+        # Ordering of points in the result of the union is not defined and
+        # implementation-dependent (DB backend, GEOS version)
+        self.assertSetEqual(set([p.ewkt for p in ref_u1]), set([p.ewkt for p in u1]))
+        self.assertSetEqual(set([p.ewkt for p in ref_u2]), set([p.ewkt for p in u2]))
+        self.assertSetEqual(set([p.ewkt for p in ref_u1]), set([p.ewkt for p in u3]))
 
     def test05_select_related_fk_to_subclass(self):
         "Testing that calling select_related on a query over a model with an FK to a model subclass works"
         # Regression test for #9752.
-        l = list(DirectoryEntry.objects.all().select_related())
+        list(DirectoryEntry.objects.all().select_related())
 
     def test06_f_expressions(self):
         "Testing F() expressions on GeometryFields."
@@ -134,7 +132,7 @@ class RelatedGeoModelTest(TestCase):
         c1 = pcity.location.point
         c2 = c1.transform(2276, clone=True)
         b2 = c2.buffer(100)
-        p1 = Parcel.objects.create(name='P1', city=pcity, center1=c1, center2=c2, border1=b1, border2=b2)
+        Parcel.objects.create(name='P1', city=pcity, center1=c1, center2=c2, border1=b1, border2=b2)
 
         # Now creating a second Parcel where the borders are the same, just
         # in different coordinate systems.  The center points are also the
@@ -142,7 +140,7 @@ class RelatedGeoModelTest(TestCase):
         # actually correspond to the centroid of the border.
         c1 = b1.centroid
         c2 = c1.transform(2276, clone=True)
-        p2 = Parcel.objects.create(name='P2', city=pcity, center1=c1, center2=c2, border1=b1, border2=b1)
+        Parcel.objects.create(name='P2', city=pcity, center1=c1, center2=c2, border1=b1, border2=b1)
 
         # Should return the second Parcel, which has the center within the
         # border.
@@ -181,8 +179,8 @@ class RelatedGeoModelTest(TestCase):
         for m, d, t in zip(gqs, gvqs, gvlqs):
             # The values should be Geometry objects and not raw strings returned
             # by the spatial database.
-            self.assertTrue(isinstance(d['point'], Geometry))
-            self.assertTrue(isinstance(t[1], Geometry))
+            self.assertIsInstance(d['point'], Geometry)
+            self.assertIsInstance(t[1], Geometry)
             self.assertEqual(m.point, d['point'])
             self.assertEqual(m.point, t[1])
 
@@ -257,13 +255,13 @@ class RelatedGeoModelTest(TestCase):
         qs = Location.objects.filter(id=5).annotate(num_cities=Count('city')).values('id', 'point', 'num_cities')
         self.assertEqual(1, len(qs))
         self.assertEqual(2, qs[0]['num_cities'])
-        self.assertTrue(isinstance(qs[0]['point'], GEOSGeometry))
+        self.assertIsInstance(qs[0]['point'], GEOSGeometry)
 
     # TODO: The phantom model does appear on Oracle.
     @no_oracle
     def test13_select_related_null_fk(self):
         "Testing `select_related` on a nullable ForeignKey via `GeoManager`. See #11381."
-        no_author = Book.objects.create(title='Without Author')
+        Book.objects.create(title='Without Author')
         b = Book.objects.select_related('author').get(title='Without Author')
         # Should be `None`, and not a 'dummy' model.
         self.assertEqual(None, b.author)
@@ -294,7 +292,7 @@ class RelatedGeoModelTest(TestCase):
         # This triggers TypeError when `get_default_columns` has no `local_only`
         # keyword.  The TypeError is swallowed if QuerySet is actually
         # evaluated as list generation swallows TypeError in CPython.
-        sql = str(qs.query)
+        str(qs.query)
 
     def test16_annotated_date_queryset(self):
         "Ensure annotated date querysets work if spatial backend is used.  See #14648."

@@ -59,7 +59,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         # generation.
         cursor.execute("""
             SELECT name FROM sqlite_master
-            WHERE type='table' AND NOT name='sqlite_sequence'
+            WHERE type in ('table', 'view') AND NOT name='sqlite_sequence'
             ORDER BY name""")
         return [row[0] for row in cursor.fetchall()]
 
@@ -157,7 +157,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
             # Skip indexes across multiple fields
             if len(info) != 1:
                 continue
-            name = info[0][2] # seqno, cid, name
+            name = info[0][2]  # seqno, cid, name
             indexes[name] = {'primary_key': indexes.get(name, {}).get("primary_key", False),
                              'unique': unique}
         return indexes
@@ -175,7 +175,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         results = results[results.index('(') + 1:results.rindex(')')]
         for field_desc in results.split(','):
             field_desc = field_desc.strip()
-            m = re.search('"(.*)".*PRIMARY KEY$', field_desc)
+            m = re.search('"(.*)".*PRIMARY KEY( AUTOINCREMENT)?$', field_desc)
             if m:
                 return m.groups()[0]
         return None

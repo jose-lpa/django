@@ -4,11 +4,16 @@ import os
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.urlresolvers import reverse, clear_url_caches
-from django.test import TestCase
-from django.test.utils import override_settings
+from django.http import HttpResponsePermanentRedirect
+from django.middleware.locale import LocaleMiddleware
+from django.test import TestCase, override_settings
 from django.template import Template, Context
 from django.utils._os import upath
 from django.utils import translation
+
+
+class PermanentRedirectLocaleMiddleWare(LocaleMiddleware):
+    response_redirect_class = HttpResponsePermanentRedirect
 
 
 @override_settings(
@@ -29,12 +34,12 @@ from django.utils import translation
         'django.middleware.locale.LocaleMiddleware',
         'django.middleware.common.CommonMiddleware',
     ),
+    ROOT_URLCONF='i18n.patterns.urls.default',
 )
 class URLTestCaseBase(TestCase):
     """
     TestCase base-class for the URL tests.
     """
-    urls = 'i18n.patterns.urls.default'
 
     def setUp(self):
         # Make sure the cache is empty before we are doing our tests.
@@ -68,8 +73,8 @@ class URLPrefixTests(URLTestCaseBase):
         self.assertRaises(ImproperlyConfigured, lambda: reverse('account:register'))
 
 
+@override_settings(ROOT_URLCONF='i18n.patterns.urls.disabled')
 class URLDisabledTests(URLTestCaseBase):
-    urls = 'i18n.patterns.urls.disabled'
 
     @override_settings(USE_I18N=False)
     def test_prefixed_i18n_disabled(self):
@@ -79,12 +84,12 @@ class URLDisabledTests(URLTestCaseBase):
             self.assertEqual(reverse('prefixed'), '/prefixed/')
 
 
+@override_settings(ROOT_URLCONF='i18n.patterns.urls.path_unused')
 class PathUnusedTests(URLTestCaseBase):
     """
     Check that if no i18n_patterns is used in root urlconfs, then no
     language activation happens based on url prefix.
     """
-    urls = 'i18n.patterns.urls.path_unused'
 
     def test_no_lang_activate(self):
         response = self.client.get('/nl/foo/')
@@ -180,6 +185,16 @@ class URLRedirectTests(URLTestCaseBase):
 
         response = self.client.get(response['location'])
         self.assertEqual(response.status_code, 200)
+
+    @override_settings(
+        MIDDLEWARE_CLASSES=(
+            'i18n.patterns.tests.PermanentRedirectLocaleMiddleWare',
+            'django.middleware.common.CommonMiddleware',
+        ),
+    )
+    def test_custom_redirect_class(self):
+        response = self.client.get('/account/register/', HTTP_ACCEPT_LANGUAGE='en')
+        self.assertRedirects(response, '/en/account/register/', 301)
 
 
 class URLVaryAcceptLanguageTests(URLTestCaseBase):
@@ -287,7 +302,7 @@ class URLTagTests(URLTestCaseBase):
                          ['/vertaald/', '/traduzidos/'])
 
     def test_context(self):
-        ctx = Context({'lang1':'nl', 'lang2':'pt-br'})
+        ctx = Context({'lang1': 'nl', 'lang2': 'pt-br'})
         tpl = Template("""{% load i18n %}
             {% language lang1 %}{% url 'no-prefix-translated' %}{% endlanguage %}
             {% language lang2 %}{% url 'no-prefix-translated' %}{% endlanguage %}""")
