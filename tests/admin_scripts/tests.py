@@ -1281,7 +1281,7 @@ class CommandTypes(AdminScriptTestCase):
 
     def test_specific_help(self):
         "--help can be used on a specific command"
-        args = ['sqlall', '--help']
+        args = ['help', 'sqlall']
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
         self.assertOutput(out, "Prints the CREATE TABLE, custom SQL and CREATE INDEX SQL statements for the given model module name(s).")
