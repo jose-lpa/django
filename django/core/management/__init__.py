@@ -57,9 +57,9 @@ def find_management_module(app_name):
     # of the app_name but the project directory itself isn't on the path.
     try:
         f, path, descr = imp.find_module(part, path)
-    except ImportError as e:
+    except ImportError:
         if os.path.basename(os.getcwd()) != part:
-            raise e
+            raise
     else:
         if f:
             f.close()
@@ -262,10 +262,10 @@ class ManagementUtility(object):
             # Output an extra note if settings are not properly configured
             try:
                 settings.INSTALLED_APPS
-            except ImproperlyConfigured as e:
+            except ImproperlyConfigured as err:
                 usage.append(style.NOTICE(
                     "Note that only Django core commands are listed as settings "
-                    "are not properly configured (error: %s)." % e))
+                    "are not properly configured (error: %s)." % err))
 
         return '\n'.join(usage)
 
@@ -280,6 +280,8 @@ class ManagementUtility(object):
         try:
             app_name = commands[subcommand]
         except KeyError:
+            # This might trigger ImproperlyConfigured (masked in get_commands)
+            settings.INSTALLED_APPS
             sys.stderr.write("Unknown command: %r\nType '%s help' for usage.\n" %
                 (subcommand, self.prog_name))
             sys.exit(1)

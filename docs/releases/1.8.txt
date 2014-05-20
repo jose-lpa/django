@@ -36,17 +36,28 @@ Minor features
 :mod:`django.contrib.auth`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* ...
+* Authorization backends can now raise
+  :class:`~django.core.exceptions.PermissionDenied` in
+  :meth:`~django.contrib.auth.models.User.has_perm`
+  and :meth:`~django.contrib.auth.models.User.has_module_perms`
+  to short-circuit permission checking.
 
 :mod:`django.contrib.formtools`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* ...
+* A :doc:`form wizard </ref/contrib/formtools/form-wizard>` using the
+  :class:`~django.contrib.formtools.wizard.views.CookieWizardView` will now ignore
+  an invalid cookie, and the wizard will restart from the first step. An invalid
+  cookie can occur in cases of intentional manipulation, but also after a secret
+  key change. Previously, this would raise ``WizardViewCookieModified``, a
+  ``SuspiciousOperation``, causing an exception for any user with an invalid cookie
+  upon every request to the wizard, until the cookie is removed.
 
 :mod:`django.contrib.gis`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* ...
+* Compatibility shims for ``SpatialRefSys`` and ``GeometryColumns`` changed in
+  Django 1.2 have been removed.
 
 :mod:`django.contrib.messages`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -140,6 +151,9 @@ Management Commands
   :djadminopt:`--exclude` which allows exclusion of specific locales from
   processing.
 
+* The :djadminopt:`--ignorenonexistent` option of the :djadmin:`loaddata`
+  management command now ignores data for models that no longer exist.
+
 Models
 ^^^^^^
 
@@ -148,7 +162,9 @@ Models
 Signals
 ^^^^^^^
 
-* ...
+* Exceptions from the ``(receiver, exception)`` tuples returned by
+  :meth:`Signal.send_robust() <django.dispatch.Signal.send_robust>` now have
+  their traceback attached as a ``__traceback__`` attribute.
 
 Templates
 ^^^^^^^^^
