@@ -30,6 +30,11 @@ class GenericRelationsTests(TestCase):
         self.lion.tags.create(tag="yellow")
         self.lion.tags.create(tag="hairy")
 
+        # Original list of tags:
+        self.comp_func = lambda obj: (
+            obj.tag, obj.content_type.model_class(), obj.object_id
+        )
+
     def test_generic_relations_m2m_mimic(self):
         """
         Objects with declared GenericRelations can be tagged directly -- the
@@ -128,18 +133,13 @@ class GenericRelationsTests(TestCase):
         If you delete an object with an explicit Generic relation, the related
         objects are deleted when the source object is deleted.
         """
-        # Original list of tags:
-        comp_func = lambda obj: (
-            obj.tag, obj.content_type.model_class(), obj.object_id
-        )
-
         self.assertQuerysetEqual(TaggedItem.objects.all(), [
             ('fatty', Vegetable, self.bacon.pk),
             ('hairy', Animal, self.lion.pk),
             ('salty', Vegetable, self.bacon.pk),
             ('yellow', Animal, self.lion.pk)
         ],
-            comp_func
+            self.comp_func
         )
         self.lion.delete()
 
@@ -147,7 +147,7 @@ class GenericRelationsTests(TestCase):
             ('fatty', Vegetable, self.bacon.pk),
             ('salty', Vegetable, self.bacon.pk),
         ],
-            comp_func
+            self.comp_func
         )
 
     def test_object_deletion_without_generic_relation(self):
@@ -155,11 +155,6 @@ class GenericRelationsTests(TestCase):
         If Generic Relation is not explicitly defined, any related objects
         remain after deletion of the source object.
         """
-        # Original list of tags:
-        comp_func = lambda obj: (
-            obj.tag, obj.content_type.model_class(), obj.object_id
-        )
-
         TaggedItem.objects.create(content_object=self.quartz, tag="clearish")
         quartz_pk = self.quartz.pk
         self.quartz.delete()
@@ -170,7 +165,7 @@ class GenericRelationsTests(TestCase):
             ('salty', Vegetable, self.bacon.pk),
             ('yellow', Animal, self.lion.pk),
         ],
-            comp_func
+            self.comp_func
         )
 
     def test_tag_deletion_related_objects_unaffected(self):
@@ -178,11 +173,6 @@ class GenericRelationsTests(TestCase):
         If you delete a tag, the objects using the tag are unaffected (other
         than losing a tag).
         """
-        # Original list of tags:
-        comp_func = lambda obj: (
-            obj.tag, obj.content_type.model_class(), obj.object_id
-        )
-
         ctype = ContentType.objects.get_for_model(self.lion)
         tag = TaggedItem.objects.get(
             content_type__pk=ctype.id, object_id=self.lion.id, tag="hairy")
@@ -194,7 +184,7 @@ class GenericRelationsTests(TestCase):
             ('salty', Vegetable, self.bacon.pk),
             ('yellow', Animal, self.lion.pk)
         ],
-            comp_func
+            self.comp_func
         )
 
     def test_assign_with_queryset(self):
