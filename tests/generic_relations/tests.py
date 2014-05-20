@@ -29,19 +29,12 @@ class GenericRelationsTests(TestCase):
         self.bacon.tags.create(tag="salty")
         self.lion.tags.create(tag="yellow")
         self.lion.tags.create(tag="hairy")
-        # self.platypus.tags.create(tag="fatty")
 
     def test_generic_relations_m2m_mimic(self):
         """
         Objects with declared GenericRelations can be tagged directly -- the
         API mimics the many-to-many API.
         """
-        # self.bacon.tags.create(tag="fatty")
-        # self.bacon.tags.create(tag="salty")
-        # self.lion.tags.create(tag="yellow")
-        # self.lion.tags.create(tag="hairy")
-        # self.platypus.tags.create(tag="fatty")
-
         self.assertQuerysetEqual(self.lion.tags.all(), [
             "<TaggedItem: hairy>",
             "<TaggedItem: yellow>"
@@ -65,7 +58,6 @@ class GenericRelationsTests(TestCase):
             qs, ["<TaggedItem: hairy>", "<TaggedItem: yellow>"]
         )
 
-        ###### Is this really necessary?
         mpk = ManualPK.objects.create(id=1)
         mpk.tags.create(tag='mpk')
         from django.db.models import Q
@@ -73,7 +65,6 @@ class GenericRelationsTests(TestCase):
             Q(animal__isnull=False) | Q(manualpk__id=1)).order_by('tag')
         self.assertQuerysetEqual(
             qs, ["hairy", "mpk", "yellow"], lambda x: x.tag)
-        ######
 
     def test_exclude_generic_relations(self):
         """
@@ -182,9 +173,16 @@ class GenericRelationsTests(TestCase):
             comp_func
         )
 
-        # # If you delete a tag, the objects using the tag are unaffected
-        # # (other than losing a tag)
-        # tag = TaggedItem.objects.order_by("id")[0]
+    def test_tag_deletion_related_objects_unaffected(self):
+        """
+        If you delete a tag, the objects using the tag are unaffected (other
+        than losing a tag).
+        """
+        # Original list of tags:
+        comp_func = lambda obj: (
+            obj.tag, obj.content_type.model_class(), obj.object_id
+        )
+
         ctype = ContentType.objects.get_for_model(self.lion)
         tag = TaggedItem.objects.get(
             content_type__pk=ctype.id, object_id=self.lion.id, tag="hairy")
@@ -192,7 +190,6 @@ class GenericRelationsTests(TestCase):
 
         self.assertQuerysetEqual(self.lion.tags.all(), ["<TaggedItem: yellow>"])
         self.assertQuerysetEqual(TaggedItem.objects.all(), [
-            ('clearish', Mineral, quartz_pk),
             ('fatty', Vegetable, self.platypus.pk),
             ('salty', Vegetable, self.bacon.pk),
             ('yellow', Animal, self.lion.pk)
